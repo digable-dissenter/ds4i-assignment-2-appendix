@@ -1,0 +1,218 @@
+---
+title: "Data Science for Industry: Assignment 2 Appendix"
+author: "Kenneth Ssekimpi & Levy Banda"
+student_number: "SSKKEN001 & BNDLEV001"
+assignment: "Assignment 2"
+editor: visual
+embed-resources: true
+format: 
+  html:
+    toc: true
+execute: 
+  warning: false
+  echo: false
+  cache: true
+metadata:
+  link-citations: true
+  date-format: long
+  lang: en
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+knitr::opts_knit$set(root.dir = "C:/Users/User/OneDrive/Documents/School/2023/Masters/STA5073Z/Assignments/Assignment 2/ds4l-assignment-2-appendix/")
+
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "")
+```
+
+```{r}
+#| label: packages
+#| include: false
+
+# Clear global environment
+rm(list=ls())
+
+# Libraries we need
+libs <- c('dplyr', 'ggplot2', 'kableExtra', 'lubridate', 'magick', 'purrr', 'reshape2', 'stringr', 'text2vec', 'tidyr', 'tidytext', 'topicdoc', 'topicmodels', 'tm', 'wordcloud')
+
+# Install missing libraries
+installed_libs <- libs %in% rownames(installed.packages())
+if (any(installed_libs == FALSE)) {
+  install.packages(libs[!installed_libs], repos='http://cran.us.r-project.org')
+}
+
+# Load libraries
+invisible(lapply(libs, library, character.only = TRUE))
+```
+
+```{r}
+#| label: unzip
+#| inclde: false
+
+unzip("sona-addresses-1994-2023.zip", exdir = "data")
+```
+
+```{r}
+#| label: read_wrangle
+#| warning: false
+
+# Get a list of all text files in the directory
+text_files <- list.files(path = "data", pattern = ".txt")
+# filenames <- purrr::flatten(text_files)
+# Initialize an empty list to store the data
+# speech_data <- list()
+speech_data <- c()
+i = 0
+num_chars <- c(27050, 12786, 39019, 39524, 37489, 45247, 34674, 41225, 37552, 41719, 50544, 58284, 34590, 39232, 54635, 48643, 48641, 44907, 31101, 47157, 26384, 33281, 33376, 36006, 29403, 36233, 32860, 32464, 35981, 33290, 42112, 56960, 47910, 43352, 52972, 60000)
+# Loop through the list of text files and read them into R
+for (file in text_files) {
+  i = i + 1
+  # speech <- readLines(file, warn = FALSE)
+  file_handle <- file(paste("data/", file, sep = ""), "r")
+  speech <- readChar(file_handle, nchars = num_chars[i])
+  # speech_data[[file]] <- speech
+  speech_data[i] <- speech
+  close(file_handle)
+}
+
+sona <- data.frame(filename = text_files, speech = speech_data, stringsAsFactors = FALSE)
+
+# extract year and president for each speech
+sona$year <- str_sub(sona$filename, start = 1, end = 4)
+sona$president <- str_remove_all(str_extract(sona$filename, "[dA-Z].*\\."), "\\.")
+
+# clean the sona dataset by adding the date and removing unnecessary text
+replace_reg <- '(http.*?(\\s|.$))|(www.*?(\\s|.$))|&amp;|&lt;|&gt;|\n'
+unnest_reg <- "[^A-Za-z_\\d#@']"
+sona <-sona %>%
+  mutate(speech = str_replace_all(speech, replace_reg , ' ')
+         ,date = str_sub(speech, start=1, end=30)
+         ,date = str_replace_all(date, "February", "02")
+         ,date = str_replace_all(date, "June", "06")
+         ,date = str_replace_all(date, "Feb", "02")
+         ,date = str_replace_all(date, "May", "05")
+         ,date = str_replace_all(date, "Jun", "06")
+         ,date = str_replace_all(date, "Thursday, ","")
+         ,date = str_replace_all(date, ' ', '-')        
+         ,date = str_replace_all(date, "[A-z]",'')
+         ,date = str_replace_all(date, '-----', '')
+         ,date = str_replace_all(date, '----', '')
+         ,date = str_replace_all(date, '---', '')
+         ,date = str_replace_all(date, '--', '')
+  )
+
+sona$date[36] <- "09-02-2023"
+sona$year[36] <- "2023"
+sona$date <- dmy(sona$date)
+```
+
+```{r}
+#| label: preprocess
+
+speech_tokens <- sona %>%
+  unnest_tokens(word, speech, token = "regex", pattern = unnest_reg) %>%
+  anti_join(stop_words)
+  
+words_to_remove <- c("government", "South Africa", "national",
+                     "country", "south", "africa", "honourable", 
+                     "people")
+
+speech_tokens <- speech_tokens %>%
+  filter(!word %in% words_to_remove)
+
+
+load("dsfi-lexicons.Rdata")
+```
+
+## Bing Lexicon
+
+```{r}
+#| label: bing-lexicon
+
+set.seed(2023)
+bing_sample <- t(bing[sample(1:6786, 10),])
+kable(bing_sample, caption = "Sample of bing lexicon")
+```
+
+```{r}
+#| label: nrc-lexicon
+
+set.seed(2023)
+nrc_sample <- t(nrc[sample(1:6786, 10),])
+kable(nrc_sample, caption = "Sample of nrc lexicon")
+```
+
+```{r}
+#| label: LDA preprocessing
+
+words_to_remove <- c("government", "South Africa", "national",
+                     "country", "south", "africa", "honourable", 
+                     "people", 'ensure', 'public', 'continue', 'regard', 'development', 'support', 'africans', 'african', 'programme', 'programmes',  'compatriots', 'including',  'improve', 'address', 'president', 'deputy', 'services', 'chairperson', 'speaker', 'madame', 'sector', 'social', 'system', 'service', 'growth', 'million', 'past', 'time', 'process', 'world', 'progress', 'economy', 'economic', 'cape', 'parties', 'ago', 'set', 'matter', 'manner')
+
+tidy_speeches <- sona %>% 
+  unnest_tokens(word, speech, token = "words", to_lower = T) %>%
+  filter(!word %in% stop_words$word) %>%
+  filter(!word %in% words_to_remove) %>%
+  filter(!str_detect(word, "[0-9]"))
+
+speech_tdf <- tidy_speeches%>%
+  group_by(date,word) %>%
+  count() %>%  
+  ungroup()
+
+dtm_speech <- speech_tdf %>% 
+  cast_dtm(date, word, n)
+
+# Step 1: Remove terms appearing in more than half of the documents
+dtm_speech_filtered <- removeSparseTerms(dtm_speech, sparse = 0.5)  # Keep terms that appear in less than half of the documents
+
+# Step 2: Manually remove terms that appear once
+dtm_speech_filtered <- removeSparseTerms(dtm_speech_filtered, sparse = 0.99)
+```
+
+```{r}
+#| label: LDA model
+
+speech_lda <- LDA(dtm_speech_filtered, k = 7, control = list(seed = 2023))
+
+speech_topics <- tidy(speech_lda, matrix = 'beta')
+```
+
+## Presidential-Topic Association
+
+```{r}
+#| label: speeches_gamma
+
+sona$speechId <- as.numeric(speech_lda@documents)
+
+speeches_gamma_init <- tidy(speech_lda, matrix = "gamma")
+
+speeches_gamma <- sona %>% 
+    left_join(speeches_gamma_init %>% 
+    mutate(speechId = as.numeric(document)) %>% 
+    select(-document) %>%
+    spread(key = topic, value = gamma, sep = "_"))
+
+speeches_gamma_tbl <- speeches_gamma %>% 
+  group_by(date, president) %>% 
+  summarize(topic1 = sum(topic_1 > 0.5), topic2 = sum(topic_2 > 0.5), topic3 = sum(topic_3 > 0.5), topic4 = sum(topic_4 > 0.5), topic5 = sum(topic_5 > 0.5), topic6 = sum(topic_6 > 0.5), topic7 = sum(topic_7 > 0.5))
+
+kable(speeches_gamma_tbl, caption = "Presidential-Topic Association")
+```
+
+## LDA Topic Diagnostics
+
+```{r}
+#| label: fig-topic-diagnostics
+
+diag_df <- topic_diagnostics(speech_lda, dtm_speech_filtered)
+
+diag_df <- diag_df %>%
+  mutate(topic_label = terms(speech_lda, 5) %>%
+           apply(2, paste, collapse = ", "),
+         topic_label = paste(topic_num, topic_label, sep = " - "))
+
+kable(diag_df, caption = "Topic Diagnostics")
+```
